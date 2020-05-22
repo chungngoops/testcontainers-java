@@ -14,6 +14,7 @@ import org.rnorth.ducttape.RetryCountExceededException;
 import org.rnorth.ducttape.unreliables.Unreliables;
 import org.testcontainers.containers.Container;
 import org.testcontainers.containers.GenericContainer;
+import org.testcontainers.containers.startupcheck.OneShotStartupCheckStrategy;
 import org.testcontainers.utility.Base58;
 import org.testcontainers.utility.TestEnvironment;
 
@@ -128,29 +129,6 @@ public class GenericContainerRuleTest {
             .withExtraHost("somehost", "192.168.1.10")
             .withCommand("/bin/sh", "-c", "while true; do cat /etc/hosts | nc -l -p 80; done");
 
-//    @Test
-//    public void simpleRedisTest() {
-//        String ipAddress = redis.getContainerIpAddress();
-//        Integer port = redis.getMappedPort(REDIS_PORT);
-//
-//        // Use Redisson to obtain a List that is backed by Redis
-//        Config redisConfig = new Config();
-//        redisConfig.useSingleServer().setAddress(ipAddress + ":" + port);
-//
-//        Redisson redisson = Redisson.create(redisConfig);
-//
-//        List<String> testList = redisson.getList("test");
-//        testList.add("foo");
-//        testList.add("bar");
-//        testList.add("baz");
-//
-//        List<String> testList2 = redisson.getList("test");
-//        assertEquals("The list contains the expected number of items (redis is working!)", 3, testList2.size());
-//        assertTrue("The list contains an item that was put in (redis is working!)", testList2.contains("foo"));
-//        assertTrue("The list contains an item that was put in (redis is working!)", testList2.contains("bar"));
-//        assertTrue("The list contains an item that was put in (redis is working!)", testList2.contains("baz"));
-//    }
-
     @Test
     public void testIsRunning() {
         try (GenericContainer container = new GenericContainer().withCommand("top")) {
@@ -184,7 +162,7 @@ public class GenericContainerRuleTest {
     @Test
     public void simpleRabbitMqTest() throws IOException, TimeoutException {
         ConnectionFactory factory = new ConnectionFactory();
-        factory.setHost(rabbitMq.getContainerIpAddress());
+        factory.setHost(rabbitMq.getHost());
         factory.setPort(rabbitMq.getMappedPort(RABBITMQ_PORT));
         Connection connection = factory.newConnection();
 
@@ -216,7 +194,7 @@ public class GenericContainerRuleTest {
 
     @Test
     public void simpleMongoDbTest() {
-        MongoClient mongoClient = new MongoClient(mongo.getContainerIpAddress(), mongo.getMappedPort(MONGO_PORT));
+        MongoClient mongoClient = new MongoClient(mongo.getHost(), mongo.getMappedPort(MONGO_PORT));
         MongoDatabase database = mongoClient.getDatabase("test");
         MongoCollection<Document> collection = database.getCollection("testCollection");
 
@@ -388,7 +366,7 @@ public class GenericContainerRuleTest {
         return Unreliables.retryUntilSuccess(10, TimeUnit.SECONDS, () -> {
             Uninterruptibles.sleepUninterruptibly(1, TimeUnit.SECONDS);
 
-            Socket socket = new Socket(container.getContainerIpAddress(), container.getFirstMappedPort());
+            Socket socket = new Socket(container.getHost(), container.getFirstMappedPort());
             return new BufferedReader(new InputStreamReader(socket.getInputStream()));
         });
     }
@@ -402,16 +380,24 @@ public class GenericContainerRuleTest {
     }
 
     @Test
+    public void addingExposedPortTwiceShouldNotFail() {
+        redis.addExposedPort(8987);
+        redis.addExposedPort(8987);
+        assertThat("Both ports should be exposed", redis.getExposedPorts().size(), equalTo(2)); // 2 ports = de-duplicated port 8897 and original port 6379
+        assertTrue("withExposedPort should be exposed", redis.getExposedPorts().contains(REDIS_PORT));
+        assertTrue("addExposedPort should be exposed", redis.getExposedPorts().contains(8987));
+    }
+
+    @Test
     public void sharedMemorySetTest() {
-        try (GenericContainer containerWithSharedMemory = new GenericContainer("busybox:1.29")
-            .withSharedMemorySize(1024L * FileUtils.ONE_MB)) {
+        try (GenericContainer containerWithSharedMemory = new GenericContainer()
+            .withSharedMemorySize(42L * FileUtils.ONE_MB)
+            .withStartupCheckStrategy(new OneShotStartupCheckStrategy())) {
 
             containerWithSharedMemory.start();
 
-            HostConfig hostConfig =
-                containerWithSharedMemory.getDockerClient().inspectContainerCmd(containerWithSharedMemory.getContainerId())
-                    .exec().getHostConfig();
-            assertEquals("Shared memory not set on container", hostConfig.getShmSize(), 1024 * FileUtils.ONE_MB);
+            HostConfig hostConfig = containerWithSharedMemory.getContainerInfo().getHostConfig();
+            assertEquals("Shared memory not set on container", hostConfig.getShmSize(), 42L * FileUtils.ONE_MB);
         }
     }
 }

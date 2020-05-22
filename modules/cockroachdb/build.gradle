@@ -1,0 +1,8 @@
+description = "Testcontainers :: JDBC :: CockroachDB"
+
+dependencies {
+    compile project(':jdbc')
+
+    testCompile project(':jdbc-test')
+    testCompile 'org.postgresql:postgresql:42.2.12'
+}

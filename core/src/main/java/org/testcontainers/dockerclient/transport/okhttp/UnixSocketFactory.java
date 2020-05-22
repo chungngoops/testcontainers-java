@@ -15,6 +15,10 @@ import java.net.InetAddress;
 import java.net.Socket;
 import java.net.SocketAddress;
 
+/**
+ * @deprecated use com.github.docker-java:docker-java-transport-okhttp
+ */
+@Deprecated
 @Value
 @EqualsAndHashCode(callSuper = false)
 public class UnixSocketFactory extends SocketFactory {
@@ -36,6 +40,14 @@ public class UnixSocketFactory extends SocketFactory {
                     @Override
                     public void close() throws IOException {
                         shutdownInput();
+                    }
+
+                    @Override
+                    public int read(byte[] b, int off, int len) throws IOException {
+                        if (OkHttpInvocationBuilder.CLOSING.get()) {
+                            return 0;
+                        }
+                        return super.read(b, off, len);
                     }
                 };
             }

@@ -26,10 +26,7 @@ public class ClickHouseContainer extends JdbcDatabaseContainer {
 
     public ClickHouseContainer(String dockerImageName) {
         super(dockerImageName);
-    }
 
-    @Override
-    protected void configure() {
         withExposedPorts(HTTP_PORT, NATIVE_PORT);
         waitingFor(
             new HttpWaitStrategy()
@@ -51,7 +48,7 @@ public class ClickHouseContainer extends JdbcDatabaseContainer {
 
     @Override
     public String getJdbcUrl() {
-        return JDBC_URL_PREFIX + getContainerIpAddress() + ":" + getMappedPort(HTTP_PORT) + "/" + databaseName;
+        return JDBC_URL_PREFIX + getHost() + ":" + getMappedPort(HTTP_PORT) + "/" + databaseName;
     }
 
     @Override

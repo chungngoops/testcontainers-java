@@ -14,19 +14,24 @@ public class MySQLContainer<SELF extends MySQLContainer<SELF>> extends JdbcDatab
     public static final String IMAGE = "mysql";
     public static final String DEFAULT_TAG = "5.7.22";
 
+    static final String DEFAULT_USER = "test";
+
+    static final String DEFAULT_PASSWORD = "test";
+
     private static final String MY_CNF_CONFIG_OVERRIDE_PARAM_NAME = "TC_MY_CNF";
     public static final Integer MYSQL_PORT = 3306;
     private String databaseName = "test";
-    private String username = "test";
-    private String password = "test";
+    private String username = DEFAULT_USER;
+    private String password = DEFAULT_PASSWORD;
     private static final String MYSQL_ROOT_USER = "root";
 
     public MySQLContainer() {
-        super(IMAGE + ":" + DEFAULT_TAG);
+        this(IMAGE + ":" + DEFAULT_TAG);
     }
 
     public MySQLContainer(String dockerImageName) {
         super(dockerImageName);
+        addExposedPort(MYSQL_PORT);
     }
 
     @NotNull
@@ -40,7 +45,6 @@ public class MySQLContainer<SELF extends MySQLContainer<SELF>> extends JdbcDatab
         optionallyMapResourceParameterAsVolume(MY_CNF_CONFIG_OVERRIDE_PARAM_NAME, "/etc/mysql/conf.d",
                 "mysql-default-conf");
 
-        addExposedPort(MYSQL_PORT);
         addEnv("MYSQL_DATABASE", databaseName);
         addEnv("MYSQL_USER", username);
         if (password != null && !password.isEmpty()) {
@@ -56,12 +60,17 @@ public class MySQLContainer<SELF extends MySQLContainer<SELF>> extends JdbcDatab
 
     @Override
     public String getDriverClassName() {
-        return "com.mysql.jdbc.Driver";
+        try {
+            Class.forName("com.mysql.cj.jdbc.Driver");
+            return "com.mysql.cj.jdbc.Driver";
+        } catch (ClassNotFoundException e) {
+            return "com.mysql.jdbc.Driver";
+        }
     }
 
     @Override
     public String getJdbcUrl() {
-        return "jdbc:mysql://" + getContainerIpAddress() + ":" + getMappedPort(MYSQL_PORT) + "/" + databaseName;
+        return "jdbc:mysql://" + getHost() + ":" + getMappedPort(MYSQL_PORT) + "/" + databaseName;
     }
 
     @Override
@@ -70,10 +79,14 @@ public class MySQLContainer<SELF extends MySQLContainer<SELF>> extends JdbcDatab
 
         if (! url.contains("useSSL=")) {
             String separator = url.contains("?") ? "&" : "?";
-            return url + separator + "useSSL=false";
-        } else {
-            return url;
+            url = url + separator + "useSSL=false";
         }
+
+        if (! url.contains("allowPublicKeyRetrieval=")) {
+            url = url + "&allowPublicKeyRetrieval=true";
+        }
+
+        return url;
     }
 
     @Override

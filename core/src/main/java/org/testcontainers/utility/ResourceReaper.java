@@ -2,9 +2,6 @@ package org.testcontainers.utility;
 
 import com.github.dockerjava.api.DockerClient;
 import com.github.dockerjava.api.command.InspectContainerResponse;
-import com.github.dockerjava.api.exception.ConflictException;
-import com.github.dockerjava.api.exception.DockerException;
-import com.github.dockerjava.api.exception.InternalServerErrorException;
 import com.github.dockerjava.api.exception.NotFoundException;
 import com.github.dockerjava.api.model.Bind;
 import com.github.dockerjava.api.model.ExposedPort;
@@ -13,12 +10,16 @@ import com.github.dockerjava.api.model.Network;
 import com.github.dockerjava.api.model.Ports;
 import com.github.dockerjava.api.model.Volume;
 import com.google.common.annotations.VisibleForTesting;
+import com.google.common.base.Throwables;
+import com.google.common.collect.Sets;
+
 import lombok.SneakyThrows;
 import lombok.extern.slf4j.Slf4j;
+import org.rnorth.ducttape.ratelimits.RateLimiter;
+import org.rnorth.ducttape.ratelimits.RateLimiterBuilder;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.testcontainers.DockerClientFactory;
-
 import java.io.BufferedReader;
 import java.io.IOException;
 import java.io.InputStream;
@@ -49,11 +50,17 @@ public final class ResourceReaper {
     private static final Logger LOGGER = LoggerFactory.getLogger(ResourceReaper.class);
 
     private static final List<List<Map.Entry<String, String>>> DEATH_NOTE = new ArrayList<>();
+    private static final RateLimiter RYUK_ACK_RATE_LIMITER = RateLimiterBuilder
+        .newBuilder()
+        .withRate(4, TimeUnit.SECONDS)
+        .withConstantThroughput()
+        .build();
 
     private static ResourceReaper instance;
     private final DockerClient dockerClient;
     private Map<String, String> registeredContainers = new ConcurrentHashMap<>();
-    private Set<String> registeredNetworks = Collections.newSetFromMap(new ConcurrentHashMap<>());
+    private Set<String> registeredNetworks = Sets.newConcurrentHashSet();
+    private Set<String> registeredImages = Sets.newConcurrentHashSet();
     private AtomicBoolean hookIsSet = new AtomicBoolean(false);
 
     private ResourceReaper() {
@@ -109,34 +116,36 @@ public final class ResourceReaper {
                 DockerClientFactory.TESTCONTAINERS_THREAD_GROUP,
                 () -> {
                     while (true) {
-                        int index = 0;
-                        try(Socket clientSocket = new Socket(hostIpAddress, ryukPort)) {
-                            FilterRegistry registry = new FilterRegistry(clientSocket.getInputStream(), clientSocket.getOutputStream());
+                        RYUK_ACK_RATE_LIMITER.doWhenReady(() -> {
+                            int index = 0;
+                            try(Socket clientSocket = new Socket(hostIpAddress, ryukPort)) {
+                                FilterRegistry registry = new FilterRegistry(clientSocket.getInputStream(), clientSocket.getOutputStream());
 
-                            synchronized (DEATH_NOTE) {
-                                while (true) {
-                                    if (DEATH_NOTE.size() <= index) {
-                                        try {
-                                            DEATH_NOTE.wait(1_000);
-                                            continue;
-                                        } catch (InterruptedException e) {
-                                            throw new RuntimeException(e);
+                                synchronized (DEATH_NOTE) {
+                                    while (true) {
+                                        if (DEATH_NOTE.size() <= index) {
+                                            try {
+                                                DEATH_NOTE.wait(1_000);
+                                                continue;
+                                            } catch (InterruptedException e) {
+                                                throw new RuntimeException(e);
+                                            }
+                                        }
+                                        List<Map.Entry<String, String>> filters = DEATH_NOTE.get(index);
+                                        boolean isAcknowledged = registry.register(filters);
+                                        if (isAcknowledged) {
+                                            log.debug("Received 'ACK' from Ryuk");
+                                            ryukScheduledLatch.countDown();
+                                            index++;
+                                        } else {
+                                            log.debug("Didn't receive 'ACK' from Ryuk. Will retry to send filters.");
                                         }
                                     }
-                                    List<Map.Entry<String, String>> filters = DEATH_NOTE.get(index);
-                                    boolean isAcknowledged = registry.register(filters);
-                                    if (isAcknowledged) {
-                                        log.debug("Received 'ACK' from Ryuk");
-                                        ryukScheduledLatch.countDown();
-                                        index++;
-                                    } else {
-                                        log.debug("Didn't receive 'ACK' from Ryuk. Will retry to send filters.");
-                                    }
                                 }
+                            } catch (IOException e) {
+                                log.warn("Can not connect to Ryuk at {}:{}", hostIpAddress, ryukPort, e);
                             }
-                        } catch (IOException e) {
-                            log.warn("Can not connect to Ryuk at {}:{}", hostIpAddress, ryukPort, e);
-                        }
+                        });
                     }
                 },
                 "testcontainers-ryuk"
@@ -166,6 +175,7 @@ public final class ResourceReaper {
     public synchronized void performCleanup() {
         registeredContainers.forEach(this::stopContainer);
         registeredNetworks.forEach(this::removeNetwork);
+        registeredImages.forEach(this::removeImage);
     }
 
     /**
@@ -218,12 +228,14 @@ public final class ResourceReaper {
         boolean running;
         try {
             InspectContainerResponse containerInfo = dockerClient.inspectContainerCmd(containerId).exec();
-            running = containerInfo.getState().getRunning();
+            running = containerInfo.getState() != null && Boolean.TRUE.equals(containerInfo.getState().getRunning());
         } catch (NotFoundException e) {
             LOGGER.trace("Was going to stop container but it apparently no longer exists: {}", containerId);
             return;
-        } catch (DockerException e) {
-            LOGGER.trace("Error encountered when checking container for shutdown (ID: {}) - it may not have been stopped, or may already be stopped: {}", containerId, e.getMessage());
+        } catch (Exception e) {
+            LOGGER.trace("Error encountered when checking container for shutdown (ID: {}) - it may not have been stopped, or may already be stopped. Root cause: {}",
+                containerId,
+                Throwables.getRootCause(e).getMessage());
             return;
         }
 
@@ -232,34 +244,29 @@ public final class ResourceReaper {
                 LOGGER.trace("Stopping container: {}", containerId);
                 dockerClient.killContainerCmd(containerId).exec();
                 LOGGER.trace("Stopped container: {}", imageName);
-            } catch (ConflictException e) {
-                if ( e.getMessage().startsWith("Cannot kill container: ") && e.getMessage().endsWith(containerId + " is not running")) {
-                    LOGGER.trace("Was going to kill the container but it apparently already dead : {}", e.getMessage());
-                } else {
-                    throw e;
-                }
-            } catch (DockerException e) {
-                LOGGER.trace("Error encountered shutting down container (ID: {}) - it may not have been stopped, or may already be stopped: {}", containerId, e.getMessage());
+
+            } catch (Exception e) {
+                LOGGER.trace("Error encountered shutting down container (ID: {}) - it may not have been stopped, or may already be stopped. Root cause: {}",
+                    containerId,
+                    Throwables.getRootCause(e).getMessage());
             }
         }
 
         try {
             dockerClient.inspectContainerCmd(containerId).exec();
-        } catch (NotFoundException e) {
+        } catch (Exception e) {
             LOGGER.trace("Was going to remove container but it apparently no longer exists: {}", containerId);
             return;
         }
 
         try {
             LOGGER.trace("Removing container: {}", containerId);
-            try {
-                dockerClient.removeContainerCmd(containerId).withRemoveVolumes(true).withForce(true).exec();
-                LOGGER.debug("Removed container and associated volume(s): {}", imageName);
-            } catch (InternalServerErrorException e) {
-                LOGGER.trace("Exception when removing container with associated volume(s): {} (due to {})", imageName, e.getMessage());
-            }
-        } catch (DockerException e) {
-            LOGGER.trace("Error encountered shutting down container (ID: {}) - it may not have been stopped, or may already be stopped: {}", containerId, e.getMessage());
+            dockerClient.removeContainerCmd(containerId).withRemoveVolumes(true).withForce(true).exec();
+            LOGGER.debug("Removed container and associated volume(s): {}", imageName);
+        } catch (Exception e) {
+            LOGGER.trace("Error encountered shutting down container (ID: {}) - it may not have been stopped, or may already be stopped. Root cause: {}",
+                containerId,
+                Throwables.getRootCause(e).getMessage());
         }
     }
 
@@ -342,6 +349,20 @@ public final class ResourceReaper {
 
     public void unregisterContainer(String identifier) {
         registeredContainers.remove(identifier);
+    }
+
+    public void registerImageForCleanup(String dockerImageName) {
+        setHook();
+        registeredImages.add(dockerImageName);
+    }
+
+    private void removeImage(String dockerImageName) {
+        LOGGER.trace("Removing image tagged {}", dockerImageName);
+        try {
+            dockerClient.removeImageCmd(dockerImageName).withForce(true).exec();
+        } catch (Throwable e) {
+            LOGGER.warn("Unable to delete image " + dockerImageName, e);
+        }
     }
 
     private void setHook() {

@@ -1,10 +1,11 @@
 plugins {
-    id 'com.gradle.build-scan' version '1.16'
-    id 'io.franzbecker.gradle-lombok' version '1.14'
+    id 'io.franzbecker.gradle-lombok' version '3.1.0'
     id 'nebula.provided-base' version '3.0.3'
-    id 'com.github.johnrengelman.shadow' version '2.0.2'
+    id 'com.github.johnrengelman.shadow' version '5.2.0'
     id "com.jfrog.bintray" version "1.8.4" apply false
 }
+
+apply from: "$rootDir/gradle/ci-support.gradle"
 
 subprojects {
     apply plugin: 'nebula.provided-base'
@@ -12,17 +13,21 @@ subprojects {
     apply plugin: 'idea'
     apply plugin: 'io.franzbecker.gradle-lombok'
     apply plugin: 'com.github.johnrengelman.shadow'
-    apply from: "$rootDir/gradle/publishing.gradle"
-    apply from: "$rootDir/gradle/bintray.gradle"
 
     group = "org.testcontainers"
 
     sourceCompatibility = 1.8
     targetCompatibility = 1.8
     compileJava.options.encoding = 'UTF-8'
+    compileTestJava.options.encoding = 'UTF-8'
+
+    repositories {
+        jcenter()
+        mavenCentral()
+    }
 
     lombok {
-        version = '1.18.6'
+        version = '1.18.8'
     }
 
     task delombok(type: io.franzbecker.gradle.lombok.task.DelombokTask) {
@@ -33,10 +38,28 @@ subprojects {
             args(srcDir, "-d", outputDir)
         }
     }
+    delombok.onlyIf {
+        project.sourceSets.main.java.srcDirs.find { it.exists() }
+    }
 
-    project.tasks.sourceJar.from(delombok)
+    // specific modules should be excluded from publication
+    if ( ! ["test-support", "jdbc-test"].contains(it.name) && !it.path.startsWith(":docs:") && it != project(":docs") ) {
+        apply from: "$rootDir/gradle/publishing.gradle"
+        apply from: "$rootDir/gradle/bintray.gradle"
 
-    task release(dependsOn: bintrayUpload)
+        jar.archiveClassifier.set("original")
+
+        publishing {
+            publications {
+                mavenJava(MavenPublication) { publication ->
+                    artifacts.removeAll { it.classifier == jar.archiveClassifier.get() }
+                    artifact project.tasks.shadowJar
+                }
+            }
+        }
+
+        task release(dependsOn: bintrayUpload)
+    }
 
     test {
         defaultCharacterEncoding = "UTF-8"
@@ -48,8 +71,29 @@ subprojects {
         }
     }
 
-    repositories {
-        jcenter()
+    tasks.withType(Test).all {
+        reports {
+            junitXml.outputPerTestCase = true
+        }
+    }
+
+    // Ensure that Javadoc generation is always tested
+    check.dependsOn(javadoc)
+
+    def postCheckCommand = properties["postCheckCommand"]
+    if (postCheckCommand) {
+        check.finalizedBy(tasks.create("postCheckExec", Exec) {
+            if (org.gradle.internal.os.OperatingSystem.current().isWindows()) {
+                commandLine('cmd', '/c', postCheckCommand)
+            } else {
+                commandLine('sh', '-c', postCheckCommand)
+            }
+        })
+    }
+
+    javadoc {
+        dependsOn delombok
+        source = delombok.outputs
     }
 
     shadowJar {
@@ -66,7 +110,10 @@ subprojects {
                     for (entry in jf.entries()) {
                         def name = entry.name
                         if (name.endsWith(".class")) {
-                            packages.add(name.substring(0, name.lastIndexOf('/')))
+                            def index = name.lastIndexOf('/')
+                            if (index != -1) {
+                                packages.add(name.substring(0, index))
+                            }
                         }
                     }
                     jf.close()
@@ -85,21 +132,7 @@ subprojects {
         }
     }
 
-    publishing {
-        publications {
-            mavenJava(MavenPublication) { publication ->
-                artifacts.removeAll { it.classifier == null }
-                artifact project.tasks.shadowJar
-            }
-        }
-    }
-
     dependencies {
         testCompile 'ch.qos.logback:logback-classic:1.2.3'
     }
-}
-
-buildScan {
-    termsOfServiceUrl = 'https://gradle.com/terms-of-service'
-    termsOfServiceAgree = 'yes'
 }

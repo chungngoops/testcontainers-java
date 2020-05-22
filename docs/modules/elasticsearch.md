@@ -22,7 +22,7 @@ credentialsProvider.setCredentials(AuthScope.ANY, new UsernamePasswordCredential
 RestClient restClient = RestClient.builder(HttpHost.create(container.getHttpHostAddress()))
         .setHttpClientConfigCallback(httpClientBuilder -> httpClientBuilder.setDefaultCredentialsProvider(credentialsProvider))
         .build();
-Response response = restClient.performRequest("GET", "/");
+Response response = restClient.performRequest(new Request("GET", "/"));
 
 // ... or the transport client
 TransportAddress transportAddress = new TransportAddress(container.getTcpHost());
@@ -36,7 +36,7 @@ container.stop();
 ```
 
 Note that if you are still using the [TransportClient](https://www.elastic.co/guide/en/elasticsearch/client/java-api/6.3/transport-client.html)
-(not recommended as deprecated), the default cluster name is set to `docker-cluster` so you need to change `cluster.name` setting
+(not recommended as it is deprecated), the default cluster name is set to `docker-cluster` so you need to change `cluster.name` setting
 or set `client.transport.ignore_cluster_name` to `true`.
 
 ## Choose your Elasticsearch license
