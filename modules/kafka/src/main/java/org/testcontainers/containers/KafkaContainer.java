@@ -4,6 +4,7 @@ import com.github.dockerjava.api.command.ExecCreateCmdResponse;
 import com.github.dockerjava.api.command.InspectContainerResponse;
 import lombok.SneakyThrows;
 import org.testcontainers.images.builder.Transferable;
+import org.testcontainers.utility.DockerImageName;
 import org.testcontainers.utility.TestcontainersConfiguration;
 
 import java.nio.charset.StandardCharsets;
@@ -17,6 +18,9 @@ import java.util.stream.Stream;
  */
 public class KafkaContainer extends GenericContainer<KafkaContainer> {
 
+    private static final DockerImageName DEFAULT_IMAGE_NAME = DockerImageName.parse("confluentinc/cp-kafka");
+    private static final String DEFAULT_TAG = "5.2.1";
+
     private static final String STARTER_SCRIPT = "/testcontainers_start.sh";
 
     public static final int KAFKA_PORT = 9093;
@@ -29,16 +33,27 @@ public class KafkaContainer extends GenericContainer<KafkaContainer> {
 
     private int port = PORT_NOT_ASSIGNED;
 
-    private boolean useImplicitNetwork = true;
-
+    /**
+     * @deprecated use {@link KafkaContainer(DockerImageName)} instead
+     */
+    @Deprecated
     public KafkaContainer() {
-        this("5.2.1");
+        this(TestcontainersConfiguration.getInstance().getKafkaDockerImageName().withTag(DEFAULT_TAG));
     }
 
+    /**
+     * @deprecated use {@link KafkaContainer(DockerImageName)} instead
+     */
+    @Deprecated
     public KafkaContainer(String confluentPlatformVersion) {
-        super(TestcontainersConfiguration.getInstance().getKafkaImage() + ":" + confluentPlatformVersion);
+        this(TestcontainersConfiguration.getInstance().getKafkaDockerImageName().withTag(confluentPlatformVersion));
+    }
 
-        super.withNetwork(Network.SHARED);
+    public KafkaContainer(final DockerImageName dockerImageName) {
+        super(dockerImageName);
+
+        dockerImageName.assertCompatibleWith(DEFAULT_IMAGE_NAME);
+
         withExposedPorts(KAFKA_PORT);
 
         // Use two listeners with different names, it will force Kafka to communicate with itself via internal
@@ -52,26 +67,6 @@ public class KafkaContainer extends GenericContainer<KafkaContainer> {
         withEnv("KAFKA_OFFSETS_TOPIC_NUM_PARTITIONS", "1");
         withEnv("KAFKA_LOG_FLUSH_INTERVAL_MESSAGES", Long.MAX_VALUE + "");
         withEnv("KAFKA_GROUP_INITIAL_REBALANCE_DELAY_MS", "0");
-    }
-
-    @Override
-    public KafkaContainer withNetwork(Network network) {
-        useImplicitNetwork = false;
-        return super.withNetwork(network);
-    }
-
-    @Override
-    public Network getNetwork() {
-        if (useImplicitNetwork) {
-            // TODO Only for backward compatibility, to be removed soon
-            logger().warn(
-                "Deprecation warning! " +
-                    "KafkaContainer#getNetwork without an explicitly set network. " +
-                    "Consider using KafkaContainer#withNetwork",
-                new Exception("Deprecated method")
-            );
-        }
-        return super.getNetwork();
     }
 
     public KafkaContainer withEmbeddedZookeeper() {

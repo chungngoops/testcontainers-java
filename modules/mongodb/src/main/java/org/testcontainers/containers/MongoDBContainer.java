@@ -5,6 +5,7 @@ import lombok.NonNull;
 import lombok.SneakyThrows;
 import lombok.extern.slf4j.Slf4j;
 import org.testcontainers.containers.wait.strategy.Wait;
+import org.testcontainers.utility.DockerImageName;
 
 import java.io.IOException;
 
@@ -15,18 +16,31 @@ import java.io.IOException;
  */
 @Slf4j
 public class MongoDBContainer extends GenericContainer<MongoDBContainer> {
+
+    private static final DockerImageName DEFAULT_IMAGE_NAME = DockerImageName.parse("mongo");
+    private static final String DEFAULT_TAG = "4.0.10";
     private static final int CONTAINER_EXIT_CODE_OK = 0;
     private static final int MONGODB_INTERNAL_PORT = 27017;
     private static final int AWAIT_INIT_REPLICA_SET_ATTEMPTS = 60;
-    private static final String MONGODB_VERSION_DEFAULT = "4.0.10";
     private static final String MONGODB_DATABASE_NAME_DEFAULT = "test";
 
+    /**
+     * @deprecated use {@link MongoDBContainer(DockerImageName)} instead
+     */
+    @Deprecated
     public MongoDBContainer() {
-        this("mongo:" + MONGODB_VERSION_DEFAULT);
+        this(DEFAULT_IMAGE_NAME.withTag(DEFAULT_TAG));
     }
 
     public MongoDBContainer(@NonNull final String dockerImageName) {
+        this(DockerImageName.parse(dockerImageName));
+    }
+
+    public MongoDBContainer(final DockerImageName dockerImageName) {
         super(dockerImageName);
+
+        dockerImageName.assertCompatibleWith(DEFAULT_IMAGE_NAME);
+
         withExposedPorts(MONGODB_INTERNAL_PORT);
         withCommand("--replSet", "docker-rs");
         waitingFor(
