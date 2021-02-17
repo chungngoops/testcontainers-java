@@ -27,6 +27,7 @@ import org.rnorth.ducttape.timeouts.Timeouts;
 import org.rnorth.ducttape.unreliables.Unreliables;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.testcontainers.containers.VncRecordingContainer.VncRecordingFormat;
 import org.testcontainers.containers.traits.LinkableContainer;
 import org.testcontainers.containers.wait.strategy.HostPortWaitStrategy;
 import org.testcontainers.containers.wait.strategy.LogMessageWaitStrategy;
@@ -66,6 +67,7 @@ public class BrowserWebDriverContainer<SELF extends BrowserWebDriverContainer<SE
     @Nullable
     private RemoteWebDriver driver;
     private VncRecordingMode recordingMode = VncRecordingMode.RECORD_FAILING;
+    private VncRecordingFormat recordingFormat;
     private RecordingFileFactory recordingFileFactory;
     private File vncRecordingDirectory;
 
@@ -171,7 +173,7 @@ public class BrowserWebDriverContainer<SELF extends BrowserWebDriverContainer<SE
                     vncRecordingDirectory = Files.createTempDirectory(TC_TEMP_DIR_PREFIX).toFile();
                 } catch (IOException e) {
                     // should never happen as per javadoc, since we use valid prefix
-                    logger().error("Exception while trying to create temp directory " + vncRecordingDirectory.getAbsolutePath(), e);
+                    logger().error("Exception while trying to create temp directory", e);
                     throw new ContainerLaunchException("Exception while trying to create temp directory", e);
                 }
             }
@@ -182,14 +184,15 @@ public class BrowserWebDriverContainer<SELF extends BrowserWebDriverContainer<SE
 
             vncRecordingContainer = new VncRecordingContainer(this)
                     .withVncPassword(DEFAULT_PASSWORD)
-                    .withVncPort(VNC_PORT);
+                    .withVncPort(VNC_PORT)
+                    .withVideoFormat(recordingFormat);
         }
 
         if (customImageName != null) {
             customImageName.assertCompatibleWith(COMPATIBLE_IMAGES);
             super.setDockerImageName(customImageName.asCanonicalNameString());
         } else {
-            DockerImageName standardImageForCapabilities = getImageForCapabilities(capabilities, seleniumVersion);
+            DockerImageName standardImageForCapabilities = getStandardImageForCapabilities(capabilities, seleniumVersion);
             super.setDockerImageName(standardImageForCapabilities.asCanonicalNameString());
         }
 
@@ -218,7 +221,22 @@ public class BrowserWebDriverContainer<SELF extends BrowserWebDriverContainer<SE
         setStartupAttempts(3);
     }
 
-    private static DockerImageName getImageForCapabilities(Capabilities capabilities, String seleniumVersion) {
+    /**
+     * @param capabilities a {@link Capabilities} object for either Chrome or Firefox
+     * @param seleniumVersion the version of selenium in use
+     * @return an image name for the default standalone Docker image for the appropriate browser
+     *
+     * @deprecated note that this method is deprecated and may be removed in the future. The no-args
+     * {@link BrowserWebDriverContainer#BrowserWebDriverContainer()} combined with the
+     * {@link BrowserWebDriverContainer#withCapabilities(Capabilities)} method should be considered. A decision on
+     * removal of this deprecated method will be taken at a future date.
+     */
+    @Deprecated
+    public static String getDockerImageForCapabilities(Capabilities capabilities, String seleniumVersion) {
+        return getStandardImageForCapabilities(capabilities, seleniumVersion).asCanonicalNameString();
+    }
+
+    private static DockerImageName getStandardImageForCapabilities(Capabilities capabilities, String seleniumVersion) {
         String browserName = capabilities.getBrowserName();
         switch (browserName) {
             case BrowserType.CHROME:
@@ -319,7 +337,7 @@ public class BrowserWebDriverContainer<SELF extends BrowserWebDriverContainer<SE
         }
 
         if (shouldRecord) {
-            File recordingFile = recordingFileFactory.recordingFileForTest(vncRecordingDirectory, prefix, succeeded);
+            File recordingFile = recordingFileFactory.recordingFileForTest(vncRecordingDirectory, prefix, succeeded, vncRecordingContainer.getVideoFormat());
             LOGGER.info("Screen recordings for test {} will be stored at: {}", prefix, recordingFile);
 
             vncRecordingContainer.saveRecordingToFile(recordingFile);
@@ -343,8 +361,13 @@ public class BrowserWebDriverContainer<SELF extends BrowserWebDriverContainer<SE
     }
 
     public SELF withRecordingMode(VncRecordingMode recordingMode, File vncRecordingDirectory) {
+        return withRecordingMode(recordingMode, vncRecordingDirectory, null);
+    }
+
+    public SELF withRecordingMode(VncRecordingMode recordingMode, File vncRecordingDirectory, VncRecordingFormat recordingFormat) {
         this.recordingMode = recordingMode;
         this.vncRecordingDirectory = vncRecordingDirectory;
+        this.recordingFormat = recordingFormat;
         return self();
     }
 

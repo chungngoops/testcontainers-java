@@ -44,11 +44,26 @@ public class MongoDBContainer extends GenericContainer<MongoDBContainer> {
         withExposedPorts(MONGODB_INTERNAL_PORT);
         withCommand("--replSet", "docker-rs");
         waitingFor(
-            Wait.forLogMessage(".*waiting for connections on port.*", 1)
+            Wait.forLogMessage("(?i).*waiting for connections.*", 1)
         );
     }
 
+    /**
+     * Gets a replica set url for the default {@value #MONGODB_DATABASE_NAME_DEFAULT} database.
+     *
+     * @return a replica set url.
+     */
     public String getReplicaSetUrl() {
+        return getReplicaSetUrl(MONGODB_DATABASE_NAME_DEFAULT);
+    }
+
+    /**
+     * Gets a replica set url for a provided <code>databaseName</code>.
+     *
+     * @param databaseName a database name.
+     * @return a replica set url.
+     */
+    public String getReplicaSetUrl(final String databaseName) {
         if (!isRunning()) {
             throw new IllegalStateException("MongoDBContainer should be started first");
         }
@@ -56,7 +71,7 @@ public class MongoDBContainer extends GenericContainer<MongoDBContainer> {
             "mongodb://%s:%d/%s",
             getContainerIpAddress(),
             getMappedPort(MONGODB_INTERNAL_PORT),
-            MONGODB_DATABASE_NAME_DEFAULT
+            databaseName
         );
     }
 
